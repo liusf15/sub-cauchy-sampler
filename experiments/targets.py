@@ -96,19 +96,22 @@ class Banana_t:
         assert dim >= 2, "Dimension must be at least 2"
         self.df = df
         self.dim = dim
-        self.base_dist = StudentT(df, loc=0.0, scale=1.0)
+        self.base_dist = MultivariateStudentT(df, dim)
 
     def sample(self, seed, n=1):
-        samples = self.base_dist.sample(seed=seed, sample_shape=(n, self.dim))
+        samples = self.base_dist.sample(seed=seed, sample_shape=(n, ))
         samples = samples.at[..., 1].set(samples[..., 0] ** 2 * .5 + samples[..., 1])
         return samples
 
     def log_prob(self, x):
-        x1 = x[..., 0]
-        x2 = x[..., 1]
-        rest = x[..., 2:]
-        logp_x1 = self.base_dist.log_prob(x1)
-        logp_eps = self.base_dist.log_prob(x2 - x1 ** 2 * .5)
-        logp_rest = jnp.sum(self.base_dist.log_prob(rest), axis=-1)
-        return logp_x1 + logp_eps + logp_rest
+        # x1 = x[..., 0]
+        # x2 = x[..., 1]
+        # rest = x[..., 2:]
+        # logp_x1 = self.base_dist.log_prob(x1)
+        # logp_eps = self.base_dist.log_prob(x2 - x1 ** 2 * .5)
+        # logp_rest = jnp.sum(self.base_dist.log_prob(rest), axis=-1)
+        # return logp_x1 + logp_eps + logp_rest
+        z = x.copy()
+        z = z.at[..., 1].set(z[..., 1] - z[..., 0] ** 2 * .5)
+        return self.base_dist.log_prob(z)
     
