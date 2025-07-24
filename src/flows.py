@@ -184,15 +184,17 @@ class ConditionerMLP(nn.Module):
     hidden_dims: Sequence[int]
     output_dim: int
     activation: Callable = nn.relu
+    init_scale: float = 0.01
 
     @nn.compact
     def __call__(self, x):
         for h in self.hidden_dims:
             x = self.activation(nn.Dense(h, 
-                                         kernel_init=nn.initializers.variance_scaling(scale=0.1, mode="fan_in", distribution="normal"))(x))
+                                         kernel_init=nn.initializers.variance_scaling(scale=self.init_scale, mode="fan_in", distribution="normal"))(x))
+
         x = nn.Dense(
             2 * self.output_dim,
-            kernel_init=nn.initializers.variance_scaling(scale=0.01, mode="fan_in", distribution="truncated_normal"),
+            kernel_init=nn.initializers.variance_scaling(scale=self.init_scale, mode="fan_in", distribution="truncated_normal"),
             bias_init=nn.initializers.zeros_init())(x)
         return x
 
@@ -201,6 +203,7 @@ class RealNVP(nn.Module):
     dim: int
     n_layers: int
     hidden_dims: Sequence[int]
+    init_scale: float = 0.01
 
     def setup(self):
         self.masks = [
@@ -212,7 +215,8 @@ class RealNVP(nn.Module):
             ConditionerMLP(
                 hidden_dims=self.hidden_dims, 
                 output_dim=self.dim,
-                name=f"conditioner_mlp_{i}"
+                name=f"conditioner_mlp_{i}",
+                init_scale=self.init_scale
             )
             for i in range(self.n_layers)
         ]
