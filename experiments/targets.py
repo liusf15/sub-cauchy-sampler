@@ -3,6 +3,7 @@ import jax.numpy as jnp
 from jax.scipy.special import gammaln
 import distrax
 from typing import Union
+from scipy.stats import jf_skew_t, skewcauchy, cauchy
 
 class StudentT(distrax.Distribution):
     """Student's t-distribution: location-scale version."""
@@ -44,6 +45,7 @@ class StudentT(distrax.Distribution):
         return jnp.broadcast_shapes(
             jnp.shape(self.df), jnp.shape(self.loc), jnp.shape(self.scale)
         )
+
 
 class MultivariateStudentT(distrax.Distribution):
     def __init__(self, df: float, dim: int):
@@ -91,6 +93,7 @@ class MultivariateStudentT(distrax.Distribution):
     def batch_shape(self):
         return ()
     
+
 class Banana_t:
     def __init__(self, df: float, dim: int):
         assert dim >= 2, "Dimension must be at least 2"
@@ -104,14 +107,57 @@ class Banana_t:
         return samples
 
     def log_prob(self, x):
-        # x1 = x[..., 0]
-        # x2 = x[..., 1]
-        # rest = x[..., 2:]
-        # logp_x1 = self.base_dist.log_prob(x1)
-        # logp_eps = self.base_dist.log_prob(x2 - x1 ** 2 * .5)
-        # logp_rest = jnp.sum(self.base_dist.log_prob(rest), axis=-1)
-        # return logp_x1 + logp_eps + logp_rest
         z = x.copy()
         z = z.at[..., 1].set(z[..., 1] - z[..., 0] ** 2 * .5)
         return self.base_dist.log_prob(z)
+
+
+class skewt:
+    def __init__(self, a, b):
+        self.a = a
+        self.b = b
+        self.d = len(a)
+        self._skewt_dist = jf_skew_t(a, b)
     
+    def log_prob(self, x):
+        logp = (self.a + 0.5) * jnp.log(1 + x / jnp.sqrt(self.a + self.b + x**2)) + (self.b + .5) * jnp.log(1 - x / jnp.sqrt(self.a + self.b + x**2))
+        return logp.sum(-1)
+
+    def sample(self, seed, n=1):
+        return self._skewt_dist.rvs((n, self.d), random_state=seed)
+
+
+class skewCauchy:
+    def __init__(self, a):
+        self.a = a
+        self.d = len(a)
+        self._cauchy_dist = skewcauchy(a)
+    
+    def log_prob(self, x):
+        logp = -jnp.log(1 + x ** 2 / (self.a * jnp.sign(x) + 1)**2)
+        return logp.sum(-1)
+    
+    def sample(self, seed, n=1):
+        return self._cauchy_dist.rvs((n, self.d), random_state=seed)
+
+
+class CauchyDifference:
+    """
+    Definition 2.1 of https://arxiv.org/pdf/2105.12488 
+    """
+    def __init__(self, d, gamma=1., lbd=1.):
+        self.d = d
+        self.gamma = gamma
+        self.lbd = lbd
+    
+    def log_prob(self, x):
+        z = jnp.diff(x, axis=-1)
+        logp1 = -jnp.log(self.gamma + z[..., 0]**2)
+        logp2 = jnp.sum(-jnp.log(self.lbd + z[..., 1:]**2), axis=-1)
+        return logp1 + logp2
+    
+    def sample(self, seed, n=1):
+        z = cauchy.rvs(size=(n, self.d), random_state=seed)
+        z[:, 0] /= self.gamma
+        z[:, 1:] /= self.lbd
+        return jnp.cumsum(z, axis=-1)
