@@ -2,6 +2,8 @@ import jax
 import jax.numpy as jnp
 from scipy.stats import beta
 
+from src.train import train
+
 def uniform_sample_bright_side(d, latitude, key, n=1):
     """
     Sample uniformly from the bright side of a d-dimensional sphere.
@@ -29,7 +31,11 @@ def rwm_bright_side(logp_fn, x0, latitude, key, nsample, stepsize=0.1):
     def random_walk_step(carry, i):
         x, key = carry
         key, subkey = jax.random.split(key)
-        x_new = x + jax.random.normal(subkey, shape=x.shape) * stepsize
+        eps = jax.random.normal(subkey, shape=x.shape) * stepsize
+        eps = eps - (x - center) * jnp.dot(x - center, eps) / jnp.linalg.norm(x - center)
+        # assert abs(jnp.dot(eps, x - center)) < 0.001
+        # assert abs(jnp.linalg.norm(x - center) - 1) < 0.001
+        x_new = x + eps
         x_new = (x_new - center) / jnp.linalg.norm(x_new - center) + center
         log_accept = jnp.where(x_new[-1] < latitude, logp_fn(x_new) - logp_fn(x), -jnp.inf)
 
@@ -110,3 +116,28 @@ class SCP:
             logdet = self.log_jacobian(params, y)
             return logp_Rd(y) + logdet
         return logp_transformed
+    
+    def minimize_reverse_kl(self, logp_fn, seed=0, ntrain=1000, learning_rate=0.01, max_iter=1000):
+        d = self.d
+        ref_samples = uniform_sample_bright_side(d, self.latitude, jax.random.key(seed), n=ntrain)
+
+        params = {
+            'observer': jnp.zeros(d),
+            'shift': jnp.zeros(d),
+            'scale': 0.
+        }
+
+        def loss_fn(params):
+            return self.reverse_kl(params, logp_fn, ref_samples)
+
+        opt_params, losses = train(loss_fn, params, learning_rate=learning_rate, max_iter=max_iter)
+        return opt_params, losses
+    
+    def rwm_bright_side(self, logp_fn, params, seed, stepsize=1., nsample=1000, burnin=100, thinning=1):
+        logp_sphere = self.transform_target(logp_fn, params)
+        key1, key2 = jax.random.split(jax.random.key(seed))
+        x0 = uniform_sample_bright_side(self.d, self.latitude, key1, n=1)[0]
+        mcmc_samples, accepts = rwm_bright_side(logp_sphere, x0, self.latitude, key=key2, nsample=nsample+burnin, stepsize=stepsize)
+        mcmc_samples = self.projection(params, mcmc_samples[burnin::thinning])
+        return mcmc_samples, jnp.mean(accepts[burnin::thinning])
+    
