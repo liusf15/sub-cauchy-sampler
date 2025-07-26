@@ -6,8 +6,6 @@ from typing import Union
 from scipy.stats import jf_skew_t, skewcauchy, cauchy
 
 class StudentT(distrax.Distribution):
-    """Student's t-distribution: location-scale version."""
-
     def __init__(self, df: float, loc: Union[float, jnp.ndarray], scale: Union[float, jnp.ndarray]):
         self.df = jnp.asarray(df)
         self.loc = jnp.asarray(loc)
@@ -29,7 +27,6 @@ class StudentT(distrax.Distribution):
         return jnp.exp(self.log_prob(x))
 
     def _sample_n(self, seed, sample_shape=()):
-        """Sample using standard method: Z = loc + scale * T, where T ~ t(df)."""
         key1, key2 = jax.random.split(seed)
         g = jax.random.gamma(key1, self.df / 2, shape=sample_shape) * 2
         z = jax.random.normal(key2, shape=sample_shape)
@@ -46,20 +43,18 @@ class StudentT(distrax.Distribution):
             jnp.shape(self.df), jnp.shape(self.loc), jnp.shape(self.scale)
         )
 
-
 class MultivariateStudentT(distrax.Distribution):
     def __init__(self, d, df):
         """
         Standard multivariate Student's t-distribution with zero mean and identity covariance.
 
         Args:
+            d: Dimension (d >= 1)
             df: Degrees of freedom (> 0), scalar
-            dim: Dimension (d >= 1)
         """
         self.df = df
         self.d = d
 
-        # Precompute log normalization constant
         self._log_norm_const = (
             gammaln((df + d) / 2)
             - gammaln(df / 2)
@@ -72,12 +67,6 @@ class MultivariateStudentT(distrax.Distribution):
         return self._log_norm_const + log_kernel
 
     def _sample_n(self, seed: jax.random.PRNGKey, sample_shape=()) -> jnp.ndarray:
-        """
-        Samples from the standard multivariate t distribution:
-        X = Z / sqrt(G / df), where
-        - Z ~ N(0, I)
-        - G ~ Gamma(df / 2, 1/2)
-        """
         key1, key2 = jax.random.split(seed)
         shape = (sample_shape, ) + (self.d,)
 
@@ -93,7 +82,6 @@ class MultivariateStudentT(distrax.Distribution):
     def batch_shape(self):
         return ()
     
-
 class Banana_t:
     def __init__(self, d, df):
         self.df = df
@@ -110,7 +98,6 @@ class Banana_t:
         z = z.at[..., 1].set(z[..., 1] - z[..., 0] ** 2 * .5)
         return self.base_dist.log_prob(z)
 
-
 class skewt:
     def __init__(self, a, b):
         self.a = a
@@ -125,7 +112,6 @@ class skewt:
     def sample(self, seed, n=1):
         return self._skewt_dist.rvs((n, self.d), random_state=seed)
 
-
 class skewCauchy:
     def __init__(self, a):
         self.a = a
@@ -138,7 +124,6 @@ class skewCauchy:
     
     def sample(self, seed, n=1):
         return self._cauchy_dist.rvs((n, self.d), random_state=seed)
-
 
 class CauchyDifference:
     """

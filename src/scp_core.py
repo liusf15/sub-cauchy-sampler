@@ -33,8 +33,6 @@ def rwm_bright_side(logp_fn, x0, latitude, key, nsample, stepsize=0.1):
         key, subkey = jax.random.split(key)
         eps = jax.random.normal(subkey, shape=x.shape) * stepsize
         eps = eps - (x - center) * jnp.dot(x - center, eps) / jnp.linalg.norm(x - center)
-        # assert abs(jnp.dot(eps, x - center)) < 0.001
-        # assert abs(jnp.linalg.norm(x - center) - 1) < 0.001
         x_new = x + eps
         x_new = (x_new - center) / jnp.linalg.norm(x_new - center) + center
         log_accept = jnp.where(x_new[-1] < latitude, logp_fn(x_new) - logp_fn(x), -jnp.inf)
@@ -124,7 +122,7 @@ class SCP:
         params = {
             'observer': jnp.zeros(d),
             'shift': jnp.zeros(d),
-            'scale': 0.
+            'scale': 0. # log scale
         }
 
         def loss_fn(params):
