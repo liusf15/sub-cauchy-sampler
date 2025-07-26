@@ -48,7 +48,7 @@ class StudentT(distrax.Distribution):
 
 
 class MultivariateStudentT(distrax.Distribution):
-    def __init__(self, df: float, dim: int):
+    def __init__(self, d, df):
         """
         Standard multivariate Student's t-distribution with zero mean and identity covariance.
 
@@ -57,18 +57,18 @@ class MultivariateStudentT(distrax.Distribution):
             dim: Dimension (d >= 1)
         """
         self.df = df
-        self.dim = dim
+        self.d = d
 
         # Precompute log normalization constant
         self._log_norm_const = (
-            gammaln((df + dim) / 2)
+            gammaln((df + d) / 2)
             - gammaln(df / 2)
-            - 0.5 * dim * jnp.log(df * jnp.pi)
+            - 0.5 * d * jnp.log(df * jnp.pi)
         )
 
     def log_prob(self, x: jnp.ndarray) -> jnp.ndarray:
         norm2 = jnp.sum(x**2, axis=-1)
-        log_kernel = -0.5 * (self.df + self.dim) * jnp.log1p(norm2 / self.df)
+        log_kernel = -0.5 * (self.df + self.d) * jnp.log1p(norm2 / self.df)
         return self._log_norm_const + log_kernel
 
     def _sample_n(self, seed: jax.random.PRNGKey, sample_shape=()) -> jnp.ndarray:
@@ -79,7 +79,7 @@ class MultivariateStudentT(distrax.Distribution):
         - G ~ Gamma(df / 2, 1/2)
         """
         key1, key2 = jax.random.split(seed)
-        shape = (sample_shape, ) + (self.dim,)
+        shape = (sample_shape, ) + (self.d,)
 
         z = jax.random.normal(key1, shape)  # Z ~ N(0, I)
         g = jax.random.gamma(key2, self.df / 2, shape=sample_shape) * 2  # chi2 ~ Gamma(df/2, 1/2), so chi2 ~ 2 * gamma
@@ -95,11 +95,10 @@ class MultivariateStudentT(distrax.Distribution):
     
 
 class Banana_t:
-    def __init__(self, df: float, dim: int):
-        assert dim >= 2, "Dimension must be at least 2"
+    def __init__(self, d, df):
         self.df = df
-        self.dim = dim
-        self.base_dist = MultivariateStudentT(df, dim)
+        self.d = d
+        self.base_dist = MultivariateStudentT(d, df)
 
     def sample(self, seed, n=1):
         samples = self.base_dist.sample(seed=seed, sample_shape=(n, ))
@@ -161,3 +160,23 @@ class CauchyDifference:
         z[:, 0] /= self.gamma
         z[:, 1:] /= self.lbd
         return jnp.cumsum(z, axis=-1)
+
+class funnel_t:
+    def __init__(self, d, df):
+        self.df = df
+        self.d = d
+        self.base_dist_x0 = StudentT(df, loc=0., scale=1.)
+
+    def sample(self, seed, n=1):
+        key1, key2 = jax.random.split(jax.random.key(seed))
+        x0 = self.base_dist_x0.sample(seed=key1, sample_shape=(n, 1))
+        x = jax.random.normal(key=key2, shape=(n, self.d-1)) * jnp.exp(x0 / 2)
+        samples = jnp.concatenate([x0, x], axis=-1)
+        return samples
+
+    def log_prob(self, x):
+        logp_0 = self.base_dist_x0.log_prob(x[..., 0])
+        scale = jnp.exp(x[..., 0] / 2)
+        logp_rest = jnp.sum(-0.5 * (x[..., 1:] / scale)** 2 - jnp.log(scale), axis=-1)
+        return logp_0 + logp_rest
+        
