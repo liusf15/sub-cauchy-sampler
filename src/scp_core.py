@@ -19,7 +19,7 @@ def uniform_sample_bright_side(d, latitude, key, n=1):
     x = x / jnp.linalg.norm(x, axis=-1, keepdims=True) * radius[:, None]
     return jnp.concatenate([x, height[:, None]], axis=-1)
 
-def rwm_bright_side(logp_fn, x0, latitude, key, nsample, stepsize=0.1):
+def rwm_bright_side_reject(logp_fn, x0, latitude, key, nsample, stepsize=0.1):
     """
     Random walk on the sphere centered at (0,...,0,1) with last coordinate < latitude.
     logp_fn: target log density function on this sphere.
@@ -35,16 +35,80 @@ def rwm_bright_side(logp_fn, x0, latitude, key, nsample, stepsize=0.1):
         eps = eps - (x - center) * jnp.dot(x - center, eps) / jnp.linalg.norm(x - center)
         x_new = x + eps
         x_new = (x_new - center) / jnp.linalg.norm(x_new - center) + center
-        log_accept = jnp.where(x_new[-1] < latitude, logp_fn(x_new) - logp_fn(x), -jnp.inf)
-
+        log_accept = jnp.where(x_new[-1] < latitude, 
+                               logp_fn(x_new) - logp_fn(x), 
+                               -jnp.inf)
         key, subkey = jax.random.split(key)
         u = jax.random.uniform(subkey)
         accept = (jnp.log(u) < log_accept) * 1.
         x = x * (1 - accept) + x_new * accept
-
         return (x, key), (x, accept)
-
     return jax.lax.scan(random_walk_step, (x0, key), jnp.arange(nsample))[1]
+
+def rwm_bright_side_stepout(logp_fn, x0, latitude, key, nsample, stepsize=0.1):
+    """
+    Random walk on the sphere centered at (0,...,0,1) with last coordinate < latitude.
+    logp_fn: target log density function on this sphere.
+    x0: initial point on the sphere
+    nsample: number of MCMC iterations
+    stepsize: step size for the random walk
+    """
+    center = jnp.eye(x0.shape[0])[-1]
+    def random_walk_step(carry, i):
+        x, key = carry
+        key, subkey = jax.random.split(key)
+        eps = jax.random.normal(subkey, shape=x.shape) * stepsize
+        eps = eps - (x - center) * jnp.dot(x - center, eps) / jnp.linalg.norm(x - center)
+        x_new = x + eps
+        x_new = (x_new - center) / jnp.linalg.norm(x_new - center) + center
+        x_new = jnp.where(x_new[-1] < latitude, 
+                          x_new, 
+                          stepout_dark_side(x - center, x_new - center, latitude - 1) + center)
+
+        log_accept = logp_fn(x_new) - logp_fn(x)
+        key, subkey = jax.random.split(key)
+        u = jax.random.uniform(subkey)
+        accept = (jnp.log(u) < log_accept) * 1.
+        x = x * (1 - accept) + x_new * accept
+        return (x, key), (x, accept)
+    return jax.lax.scan(random_walk_step, (x0, key), jnp.arange(nsample))[1]
+
+def stepout_dark_side(x, y, lat):
+    alpha = jnp.arccos(jnp.dot(x, y))
+    u = y - jnp.dot(x, y) * x
+    u /= jnp.linalg.norm(u)
+
+    R = jnp.sqrt(x[-1]**2 + u[-1]**2)
+    gamma = jnp.arccos(lat / R)
+    phi = jnp.arccos(x[-1] / R)
+
+    k = jnp.floor((phi + gamma) / alpha) + 1
+    theta = k * alpha
+    y_ = x * jnp.cos(theta) + u * jnp.sin(theta)
+    y_ /= jnp.linalg.norm(y_)
+    return y_
+
+# def teleport(x, y, lat):
+#     u = y - jnp.dot(x, y) * x
+#     u /= jnp.linalg.norm(u)
+
+#     R = jnp.sqrt(x[-1]**2 + u[-1]**2)
+#     gamma = jnp.arccos(lat / R)
+
+#     y_plus = y + (jnp.cos(2 * gamma) - 1) * (jnp.dot(x, y) * x + jnp.dot(u, y) * u) + jnp.sin(2 * gamma) * (jnp.dot(x, y) * u - jnp.dot(u, y) * x)
+#     y_plus /= jnp.linalg.norm(y_plus)
+#     return y_plus
+
+# def hardwall(x, y, lat):
+#     u = y - jnp.dot(x, y) * x
+#     u /= jnp.linalg.norm(u)
+
+#     R = jnp.sqrt(x[-1]**2 + u[-1]**2)
+#     gamma = jnp.arccos(lat / R)
+#     phi = jnp.arccos(x[-1] / R)
+#     p_ = x * jnp.cos(phi - gamma) + u * jnp.sin(phi - gamma)
+#     p_ /= jnp.linalg.norm(p_)
+#     raise NotImplementedError
 
 class SCP:
     def __init__(self, d, latitude):
@@ -131,11 +195,16 @@ class SCP:
         opt_params, losses = train(loss_fn, params, learning_rate=learning_rate, max_iter=max_iter)
         return opt_params, losses
     
-    def rwm_bright_side(self, logp_fn, params, seed, stepsize=1., nsample=1000, burnin=100, thinning=1):
+    def rwm_bright_side(self, logp_fn, params, seed, stepsize=1., nsample=1000, burnin=100, thinning=1, algo='stepout'):
         logp_sphere = self.transform_target(logp_fn, params)
         key1, key2 = jax.random.split(jax.random.key(seed))
         x0 = uniform_sample_bright_side(self.d, self.latitude, key1, n=1)[0]
-        mcmc_samples, accepts = rwm_bright_side(logp_sphere, x0, self.latitude, key=key2, nsample=nsample+burnin, stepsize=stepsize)
+        if algo == 'stepout':
+            mcmc_samples, accepts = rwm_bright_side_stepout(logp_sphere, x0, self.latitude, key=key2, nsample=nsample+burnin, stepsize=stepsize)
+        elif algo == 'reject':
+            mcmc_samples, accepts = rwm_bright_side_reject(logp_sphere, x0, self.latitude, key=key2, nsample=nsample+burnin, stepsize=stepsize)
+        else:
+            raise ValueError("Unknown algorithm: {}".format(algo))
         mcmc_samples = self.projection(params, mcmc_samples[burnin::thinning])
         return mcmc_samples, jnp.mean(accepts[burnin::thinning])
     
