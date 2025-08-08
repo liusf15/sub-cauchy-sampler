@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 from scipy.stats import beta
-
+import jax_tqdm
 from src.train import train
 
 def uniform_sample_bright_side(d, latitude, key, n=1):
@@ -22,12 +22,14 @@ def uniform_sample_bright_side(d, latitude, key, n=1):
 def rwm_bright_side_reject(logp_fn, x0, latitude, key, nsample, stepsize=0.1):
     """
     Random walk on the sphere centered at (0,...,0,1) with last coordinate < latitude.
+    A proposal is rejected if the last coordinate >= latitude.
     logp_fn: target log density function on this sphere.
     x0: initial point on the sphere
     nsample: number of MCMC iterations
     stepsize: step size for the random walk
     """
     center = jnp.eye(x0.shape[0])[-1]
+    @jax_tqdm.scan_tqdm(nsample)
     def random_walk_step(carry, i):
         x, key = carry
         key, subkey = jax.random.split(key)
@@ -48,12 +50,14 @@ def rwm_bright_side_reject(logp_fn, x0, latitude, key, nsample, stepsize=0.1):
 def rwm_bright_side_stepout(logp_fn, x0, latitude, key, nsample, stepsize=0.1):
     """
     Random walk on the sphere centered at (0,...,0,1) with last coordinate < latitude.
+    If a proposal lands on the dark side, move it to the bright side step by step.
     logp_fn: target log density function on this sphere.
     x0: initial point on the sphere
     nsample: number of MCMC iterations
     stepsize: step size for the random walk
     """
     center = jnp.eye(x0.shape[0])[-1]
+    @jax_tqdm.scan_tqdm(nsample)
     def random_walk_step(carry, i):
         x, key = carry
         key, subkey = jax.random.split(key)
@@ -87,28 +91,6 @@ def stepout_dark_side(x, y, lat):
     y_ = x * jnp.cos(theta) + u * jnp.sin(theta)
     y_ /= jnp.linalg.norm(y_)
     return y_
-
-# def teleport(x, y, lat):
-#     u = y - jnp.dot(x, y) * x
-#     u /= jnp.linalg.norm(u)
-
-#     R = jnp.sqrt(x[-1]**2 + u[-1]**2)
-#     gamma = jnp.arccos(lat / R)
-
-#     y_plus = y + (jnp.cos(2 * gamma) - 1) * (jnp.dot(x, y) * x + jnp.dot(u, y) * u) + jnp.sin(2 * gamma) * (jnp.dot(x, y) * u - jnp.dot(u, y) * x)
-#     y_plus /= jnp.linalg.norm(y_plus)
-#     return y_plus
-
-# def hardwall(x, y, lat):
-#     u = y - jnp.dot(x, y) * x
-#     u /= jnp.linalg.norm(u)
-
-#     R = jnp.sqrt(x[-1]**2 + u[-1]**2)
-#     gamma = jnp.arccos(lat / R)
-#     phi = jnp.arccos(x[-1] / R)
-#     p_ = x * jnp.cos(phi - gamma) + u * jnp.sin(phi - gamma)
-#     p_ /= jnp.linalg.norm(p_)
-#     raise NotImplementedError
 
 class SCP:
     def __init__(self, d, latitude):
