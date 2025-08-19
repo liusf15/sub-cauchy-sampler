@@ -11,8 +11,8 @@
 
 2. **Create a virtual environment (recommended):**
    ```bash
-   python -m venv scp_venv
-   . scp_venv/bin/activate 
+   python -m venv venv_scp
+   . venv_scp/bin/activate 
    ```
 
 3. **Install dependencies:**
