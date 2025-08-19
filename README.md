@@ -27,5 +27,5 @@ See example usage in the [notebook](experiments/examples.ipynb).
 To run experiments,
 
 ```bash
-python -m experiments.run_experiment --target skewt --d 10 --latitude 1.5 --nsample 1000_000
+python -m experiments.run_experiment --target skewt --d 10 --latitude 1.5 --nsample 1000_000 --thinning 100
 ```
