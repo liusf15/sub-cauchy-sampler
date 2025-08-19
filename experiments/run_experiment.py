@@ -48,6 +48,8 @@ def run(target_name, d, latitude, nsample, burnin, stepsize, thinning=1, seed=0,
         for i in range(2):
             for j in range(5):
                 idx = int(idx_to_plot[i * 5 + j])
+                if idx == 10:
+                    idx = 1
                 ax[i, j].plot(exact_quantiles.iloc[:, idx], mcmc_quantiles.iloc[:, idx], marker='o')
                 ax[i, j].set_title(f'x{idx}')
                 ax[i, j].plot(exact_quantiles.iloc[:, idx], exact_quantiles.iloc[:, idx], 'r--')
