@@ -69,6 +69,7 @@ if __name__ == "__main__":
     parser.add_argument('--thinning', type=int, default=1)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--algo', type=str, default='stepout', choices=['stepout', 'reject'])
+    parser.add_argument('--df', type=int, default=5)
     args = parser.parse_args()
     
     savepath = os.path.join(args.rootdir, args.date, args.target)
@@ -83,4 +84,5 @@ if __name__ == "__main__":
         thinning=args.thinning,
         seed=args.seed,
         algo=args.algo,
+        df=args.df,
         savepath=savepath)
