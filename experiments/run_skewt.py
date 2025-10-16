@@ -192,7 +192,7 @@ def run(d, latitude, nsample, burnin, stepsize, thinning=1, seed=0, algo='stepou
                 num_samples=nsample, 
                 thinning=thinning, 
                 num_chains=1)
-    mcmc.run(jax.random.key(1), init_params=x0, extra_fields=("accept_prob",))
+    mcmc.run(jax.random.key(seed), init_params=x0, extra_fields=("accept_prob",))
     hmc_samples = mcmc.get_samples()
     print("HMC acceptance rate:", jnp.mean(mcmc.get_extra_fields()['accept_prob']))
 
