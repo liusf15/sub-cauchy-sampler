@@ -8,7 +8,6 @@ import matplotlib.pyplot as plt
 from jax.scipy.special import gammaln, betainc
 from numpyro.infer import HMC, MCMC
 from src.scp_core import SCP
-from experiments.targets import Banana_t, skewt
 
 def student_t_pdf(x, df):
     # t-pdf: c * (1 + x^2/df)^(-(df+1)/2)
