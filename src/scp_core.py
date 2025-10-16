@@ -118,6 +118,23 @@ class SCP:
         y = y * scale + shift
         return y[0] if x.ndim == 1 else y
 
+    def inverse_projection(self, params, y):
+        observer, shift, scale = self.transform_params(params)
+
+        y_hat = (y - shift) / scale
+
+        _a = jnp.sum((y_hat - observer) ** 2) + self.latitude ** 2
+        
+        _b = 2 * ((jnp.dot(y_hat - observer, observer) - self.latitude * (self.latitude - 1)))
+        
+        _c = jnp.sum(observer ** 2) + self.latitude ** 2 - 2 * self.latitude
+
+        Delta = _b ** 2 - 4 * _a * _c
+        M = (-_b + jnp.sqrt(Delta)) / (2 * _a)
+        h = M * y_hat + (1 - M) * observer
+        lat = (1 - M) * jnp.array([self.latitude])
+        return jnp.concatenate([h, lat])
+
     def log_jacobian(self, params, y, x=None):
         observer, shift, scale = self.transform_params(params)
         if y is None:
@@ -177,10 +194,11 @@ class SCP:
         opt_params, losses = train(loss_fn, params, learning_rate=learning_rate, max_iter=max_iter)
         return opt_params, losses
     
-    def rwm_bright_side(self, logp_fn, params, seed, stepsize=1., nsample=1000, burnin=100, thinning=1, algo='stepout'):
+    def rwm_bright_side(self, logp_fn, params, seed, x0=None, stepsize=1., nsample=1000, burnin=100, thinning=1, algo='stepout'):
         logp_sphere = self.transform_target(logp_fn, params)
         key1, key2 = jax.random.split(jax.random.key(seed))
-        x0 = uniform_sample_bright_side(self.d, self.latitude, key1, n=1)[0]
+        if x0 is None:
+            x0 = uniform_sample_bright_side(self.d, self.latitude, key1, n=1)[0]
         if algo == 'stepout':
             mcmc_samples, accepts = rwm_bright_side_stepout(logp_sphere, x0, self.latitude, key=key2, nsample=nsample+burnin, stepsize=stepsize)
         elif algo == 'reject':
