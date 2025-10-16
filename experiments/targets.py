@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from jax.scipy.special import gammaln
+from jax.scipy.special import gammaln, betainc
 import distrax
 from typing import Union
 from scipy.stats import jf_skew_t, skewcauchy, cauchy
@@ -164,4 +164,141 @@ class funnel_t:
         scale = jnp.exp(x[..., 0] / 2)
         logp_rest = jnp.sum(-0.5 * (x[..., 1:] / scale)** 2 - jnp.log(scale), axis=-1)
         return logp_0 + logp_rest
-        
+
+
+def student_t_pdf(x, df):
+    # t-pdf: c * (1 + x^2/df)^(-(df+1)/2)
+    c = jnp.exp(
+        gammaln((df + 1.0) / 2.0) - gammaln(df / 2.0)
+        - 0.5 * jnp.log(df * jnp.pi)
+    )
+    return c * jnp.power(1.0 + (x * x) / df, -(df + 1.0) / 2.0)
+
+def student_t_cdf(x, df):
+    """
+    JAX-compatible Student-t CDF using the regularized incomplete beta function.
+    """
+    x = jnp.asarray(x)
+    t2 = x**2
+    a = 0.5 * df
+    b = 0.5
+    ib = betainc(a, b, df / (df + t2))  # regularized incomplete beta
+    cdf = jnp.where(x > 0, 1.0 - 0.5 * ib, 0.5 * ib)
+    return cdf
+
+@jax.custom_jvp
+def student_t_cdf(x, df):
+    # primal value via incomplete beta, but clamp z away from 1 to avoid NaNs
+    v = df
+    z = v / (v + x * x)
+    # keep strictly < 1 in float64; this avoids hitting the singular endpoint
+    eps = jnp.finfo(x.dtype).eps
+    z = jnp.clip(z, 0.0, 1.0 - eps)
+    a = 0.5 * v
+    b = 0.5
+    ib = betainc(a, b, z)
+    # piecewise for sign; this is safe since z is now < 1
+    return jnp.where(x >= 0.0, 1.0 - 0.5 * ib, 0.5 * ib)
+
+# exact jvp: d/dx CDF = PDF
+@student_t_cdf.defjvp
+def _student_t_cdf_jvp(primals, tangents):
+    x, df = primals
+    xdot, dfdot = tangents
+    y = student_t_cdf(x, df)
+    # we ignore gradients w.r.t. df (NumPyro only needs grads in x)
+    ydot = student_t_pdf(x, df) * (xdot if isinstance(xdot, jax.Array) or jnp.ndim(xdot) else xdot)
+    return y, ydot
+
+class SkewMultivariateStudentT(distrax.Distribution):
+    def __init__(self, loc, scale_tril, df, alpha):
+        """
+        Multivariate skew-t distribution (Azzalini-Capitanio form).
+
+        Y ~ ST_d(loc, scale_tril @ scale_tril^T, alpha, df)
+
+        Args:
+            loc: Location vector of shape (d,)
+            scale_tril: Lower-triangular Cholesky factor of scale matrix, shape (d,d)
+            df: Degrees of freedom (>0)
+            alpha: Shape (skewness) vector of shape (d,)
+        """
+        self.loc = jnp.asarray(loc)
+        self.scale_tril = jnp.asarray(scale_tril)
+        self.df = df
+        self.alpha = jnp.asarray(alpha)
+        self.d = self.loc.shape[0]
+        assert self.scale_tril.shape == (self.d, self.d)
+        assert self.alpha.shape == (self.d,)
+
+        # Precompute inverse and log|det|
+        self.scale_inv = jnp.linalg.inv(self.scale_tril)
+        self.log_det = jnp.sum(jnp.log(jnp.diag(self.scale_tril)))
+
+        # Normalization constant for symmetric t kernel
+        self._log_norm_const = (
+            gammaln((df + self.d) / 2.0)
+            - gammaln(df / 2.0)
+            - 0.5 * self.d * jnp.log(df * jnp.pi)
+            - self.log_det
+        )
+
+    def log_prob(self, x: jnp.ndarray) -> jnp.ndarray:
+        """
+        log f_Y(x) = log[2 * t_d(z; 0, I, df) * T_{df+d}( alpha^T z * sqrt((df+d)/(df+||z||^2)) )]
+        where z = scale_inv @ (x - loc).
+        """
+        z = jnp.einsum("ij,...j->...i", self.scale_inv, x - self.loc)
+        norm2 = jnp.sum(z**2, axis=-1)
+        log_kernel = -0.5 * (self.df + self.d) * jnp.log1p(norm2 / self.df)
+        log_t_d = self._log_norm_const + log_kernel
+
+        # Skewing term
+        az = jnp.dot(z, self.alpha)
+        scale = jnp.sqrt((self.df + self.d) / (self.df + norm2))
+        arg = az * scale
+        cdf = student_t_cdf(arg, df=self.df + self.d)
+        cdf = jnp.clip(cdf, jnp.finfo(x.dtype).tiny, 1.0)
+
+        return jnp.log(2.0) + log_t_d + jnp.log(cdf)
+
+    def _sample_n(self, seed: jax.random.PRNGKey, sample_shape=()):
+        """
+        Stochastic representation:
+            W ~ ChiSq(df)/df
+            Z ~ SkewNormal_d(0, I, alpha)
+            X = loc + scale_tril @ (Z / sqrt(W))
+        """
+        key_u0, key_v, key_g = jax.random.split(seed, 3)
+        shape = (sample_shape,) + (self.d,)
+
+        # Generate skew-normal Z
+        alpha = self.alpha
+        alpha_sq = jnp.dot(alpha, alpha)
+        delta = alpha / jnp.sqrt(1.0 + alpha_sq)
+        dn2 = jnp.dot(delta, delta)
+        dn = jnp.sqrt(dn2)
+        u = jnp.where(dn > 0, delta / dn, delta)
+
+        U0 = jax.random.normal(key_u0, sample_shape)
+        V = jax.random.normal(key_v, shape)
+
+        coeff = (1.0 - jnp.sqrt(1.0 - dn2))
+        uTv = jnp.einsum("d,...d->...", u, V)
+        SV = V - coeff * u[None, ...] * uTv[..., None]
+        Z = delta[None, ...] * jnp.abs(U0)[..., None] + SV
+
+        # Student-t scaling
+        chi2 = 2.0 * jax.random.gamma(key_g, self.df / 2.0, shape=sample_shape)
+        W = chi2 / self.df
+        Y = self.loc + jnp.einsum("ij,...j->...i", self.scale_tril, Z / jnp.sqrt(W)[..., None])
+        return Y
+
+    @property
+    def event_shape(self):
+        return (self.d,)
+
+    @property
+    def batch_shape(self):
+        return ()
+    
