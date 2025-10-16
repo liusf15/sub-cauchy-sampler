@@ -196,7 +196,7 @@ def run(d, latitude, nsample, burnin, stepsize, thinning=1, seed=0, algo='stepou
     hmc_samples = mcmc.get_samples()
     print("HMC acceptance rate:", jnp.mean(mcmc.get_extra_fields()['accept_prob']))
 
-    exact_samples = target.sample(seed=jax.random.key(0), sample_shape=(1_000_000,))
+    exact_samples = target.sample(seed=jax.random.key(0), sample_shape=(10_000_000,))
 
     ps = jnp.array([0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 0.8, 0.9, 0.95, 0.98, 0.99])
     exact_quantiles = pd.DataFrame(jnp.quantile(exact_samples, ps, axis=0), index=ps, columns=[f'Exact{i}' for i in range(d)])
