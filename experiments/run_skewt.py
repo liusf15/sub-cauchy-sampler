@@ -1,11 +1,12 @@
 import os
 import argparse
 import jax
-import distrax
 import jax.numpy as jnp
 import pandas as pd
 import matplotlib.pyplot as plt
 from numpyro.infer import HMC, MCMC
+import time
+
 from src.scp_core import SCP
 from experiments.targets import SkewMultivariateStudentT
 
@@ -32,6 +33,7 @@ def run(d, latitude, nsample, burnin, stepsize, thinning=1, seed=0, algo='stepou
     else:
         x0 = jnp.zeros(d) + 100.
     u0 = scp_model.inverse_projection(opt_params, x0)
+    start = time.time()
     scp_samples, scp_accept_prob = scp_model.rwm_bright_side(target.log_prob,
                                                           opt_params, 
                                                           seed=seed, 
@@ -42,8 +44,10 @@ def run(d, latitude, nsample, burnin, stepsize, thinning=1, seed=0, algo='stepou
                                                           thinning=thinning,
                                                           algo=algo)
     print('SCP acceptance rate:', scp_accept_prob)
+    scp_time = time.time() - start
 
     print("Running HMC......")
+    start = time.time()
     hmc_kernel = HMC(potential_fn=lambda z: -target.log_prob(z), 
                      step_size=0.1, 
                      adapt_step_size=False, 
@@ -57,7 +61,9 @@ def run(d, latitude, nsample, burnin, stepsize, thinning=1, seed=0, algo='stepou
                 num_chains=1)
     mcmc.run(jax.random.key(seed), init_params=x0, extra_fields=("accept_prob",))
     hmc_samples = mcmc.get_samples()
-    print("HMC acceptance rate:", jnp.mean(mcmc.get_extra_fields()['accept_prob']))
+    hmc_time = time.time() - start
+    hmc_accept_rate = jnp.mean(mcmc.get_extra_fields()['accept_prob'])
+    print("HMC acceptance rate:", hmc_accept_rate)
 
     exact_samples = target.sample(seed=jax.random.key(0), sample_shape=(10_000_000,))
 
@@ -66,6 +72,13 @@ def run(d, latitude, nsample, burnin, stepsize, thinning=1, seed=0, algo='stepou
     scp_quantiles = pd.DataFrame(jnp.quantile(scp_samples, ps, axis=0), index=ps, columns=[f'SCP{i}' for i in range(d)])
     hmc_quantiles = pd.DataFrame(jnp.quantile(hmc_samples, ps, axis=0), index=ps, columns=[f'HMC{i}' for i in range(d)])
 
+    meta_data = {
+        'scp_accept_rate': float(scp_accept_prob),
+        'scp_time': scp_time,
+        'hmc_accept_rate': float(hmc_accept_rate),
+        'hmc_time': hmc_time
+    }
+
     if savepath is not None:
 
         filename = f'{savepath}/skewt_df{df}_d{d}_lat{latitude}_nsample{nsample}_burnin{burnin}_init{init}_stepsize{stepsize}_{algo}_seed{seed}'
@@ -73,6 +86,9 @@ def run(d, latitude, nsample, burnin, stepsize, thinning=1, seed=0, algo='stepou
         # save quantiles
         quantiles = pd.concat([exact_quantiles, scp_quantiles, hmc_quantiles], axis=1)
         quantiles.to_csv(f'{filename}.csv')
+
+        # save meta data
+        pd.DataFrame(meta_data, index=[0]).to_csv(f'{filename}_meta.csv', index=False)
 
         # qq plot
         idx_to_plot = jnp.arange(0, d, d//10)
