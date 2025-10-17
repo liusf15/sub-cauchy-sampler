@@ -301,4 +301,34 @@ class SkewMultivariateStudentT(distrax.Distribution):
     @property
     def batch_shape(self):
         return ()
-    
+
+class RobitRegression:
+    """
+    Posterior (unnormalized) for robit regression:
+        y_i ~ Bernoulli( F_t( (x_i^T beta)/scale, df=df_link ) ),
+      with student-t prior on beta
+    """
+    def __init__(self, X, y, link_df=2., link_scale=1.0, prior_df=2., prior_scale=1.):
+        self.X = jnp.asarray(X)
+        self.y = jnp.asarray(y)
+        self.n, self.d = self.X.shape
+        self.link_df = float(link_df)
+        self.link_scale = float(link_scale)
+        self.prior_df = float(prior_df)
+        self.prior_scale = float(prior_scale)
+
+    def log_prob(self, beta):
+        beta = jnp.asarray(beta)
+        # prior
+        log_prior = (-self.prior_df - 1) / 2 * jnp.sum(jnp.log1p((beta / self.prior_scale) ** 2 / self.prior_df))
+        
+        # likelihood
+        eta = self.X @ beta
+        z = eta / self.link_scale
+        p = student_t_cdf(z, self.link_df)
+        p = jnp.clip(p, 1e-8, 1.0 - 1e-8)
+
+        y = jnp.broadcast_to(self.y, p.shape)
+        ll = jnp.sum(y * jnp.log(p) + (1.0 - y) * jnp.log1p(-p), axis=-1)
+
+        return log_prior + ll
