@@ -161,8 +161,9 @@ class SCP:
         X = uniform_sample_bright_side(self.d, self.latitude, key, n=n)
         return self.projection(params, X)
     
-    def reverse_kl(self, params, logp_fn, X):
+    def reverse_kl(self, params, logp_fn, X, clip_value=1000.):
         Y = self.projection(params, X)
+        Y = jnp.clip(Y, -clip_value, clip_value)
         logp = jax.vmap(logp_fn)(Y)
         logdet = jax.vmap(self.log_jacobian, in_axes=(None, 0))(params, Y)
         return -jnp.mean(logdet + logp)
@@ -178,7 +179,7 @@ class SCP:
             return logp_Rd(y) + logdet
         return logp_transformed
     
-    def minimize_reverse_kl(self, logp_fn, seed=0, ntrain=1000, learning_rate=0.01, max_iter=1000):
+    def minimize_reverse_kl(self, logp_fn, seed=0, ntrain=1000, learning_rate=0.01, max_iter=1000, clip_value=1000.):
         d = self.d
         ref_samples = uniform_sample_bright_side(d, self.latitude, jax.random.key(seed), n=ntrain)
 
@@ -189,7 +190,7 @@ class SCP:
         }
 
         def loss_fn(params):
-            return self.reverse_kl(params, logp_fn, ref_samples)
+            return self.reverse_kl(params, logp_fn, ref_samples, clip_value=clip_value)
 
         opt_params, losses = train(loss_fn, params, learning_rate=learning_rate, max_iter=max_iter)
         return opt_params, losses
