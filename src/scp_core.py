@@ -197,7 +197,10 @@ class SCP:
     
     def rwm_bright_side(self, logp_fn, params, seed, x0=None, stepsize=1., nsample=1000, burnin=100, thinning=1, algo='stepout'):
         logp_sphere = self.transform_target(logp_fn, params)
-        key1, key2 = jax.random.split(jax.random.key(seed))
+        if isinstance(seed, int):
+            key1, key2 = jax.random.split(jax.random.key(seed))
+        else:
+            key1, key2 = jax.random.split(seed)
         if x0 is None:
             x0 = uniform_sample_bright_side(self.d, self.latitude, key1, n=1)[0]
         if algo == 'stepout':
