@@ -35,7 +35,7 @@ def run_scp(target, latitude, seed, stepsize, nsample, burnin, thinning, savepat
                                                        ntrain=2000,
                                                        max_iter=1000, 
                                                        learning_rate=0.1,
-                                                       clip_value=1000.)
+                                                       clip_value=200.)
 
     print("Running RWM on the bright side......")
     start = time.time()
