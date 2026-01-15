@@ -1,6 +1,6 @@
 # sub-cauchy-sampler
 
-Code for reproducing the numerical experiments from *Sub-Cauchy Sampling: Escaping the Dark Side of the Moon* by Sebastiano Grazzi, Sifan Liu, Gareth O. Roberts, and Jun Yang.
+Code for reproducing the numerical experiments in *Sub-Cauchy Sampling: Escaping the Dark Side of the Moon* by Sebastiano Grazzi, Sifan Liu, Gareth O. Roberts, and Jun Yang.
 
 ## Installation
 
