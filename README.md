@@ -1,5 +1,6 @@
 # sub-cauchy-sampler
 
+Code for reproducing the numerical experiments from *Sub-Cauchy Sampling: Escaping the Dark Side of the Moon* by Sebastiano Grazzi, Sifan Liu, Gareth O. Roberts, and Jun Yang.
 
 ## Installation
 
@@ -20,12 +21,5 @@
    pip install -r requirements.txt
    ```
 
-## Usage
 
-See example usage in the [notebook](experiments/examples.ipynb).
-
-To run experiments,
-
-```bash
-python -m experiments.run_experiment --target skewt --d 10 --latitude 1.5 --nsample 1000_000 --thinning 100
-```
+See example usage in the [notebook](experiments/examples.ipynb). Scripts for running the experiments are in [experiments](experiments/).
