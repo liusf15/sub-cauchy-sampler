@@ -26,9 +26,9 @@ def run_nuts(target, nsample, burnin, thinning, savepath):
     pd.DataFrame(nuts_samples).to_csv(savepath)
     print("saved to", savepath)
 
-def run_scp(target, latitude, seed, stepsize, nsample, burnin, thinning, savepath):
+def run_scp(target, latitude, affine, seed, stepsize, nsample, burnin, thinning, savepath):
     d = target.d
-    scp_model = SCP(d=d, latitude=latitude) 
+    scp_model = SCP(d=d, latitude=latitude, affine=affine)
     print("Initializing SCP parameters......")
     opt_params, losses = scp_model.minimize_reverse_kl(target.log_prob, 
                                                        seed=0, 
@@ -192,14 +192,14 @@ def run(args):
 
     target = RobitRegression(X, y, link_df=2., link_scale=1.0, prior_df=prior_df, prior_scale=prior_scale)
     savepath = os.path.join(args.rootdir, args.date, 'robit')
-    filename_prec = f"robit_d{d}_n{n}_std_{args.standardize}_prior_{prior_df}_{prior_scale}"
+    filename_prec = f"robit_d{d}_n{n}_std_{args.standardize}_prior_{prior_df}_{prior_scale}_affine{args.affine}"
     os.makedirs(savepath, exist_ok=True)
     if args.algo == 'nuts':
         savepath = os.path.join(savepath, f'{filename_prec}_nuts_n{args.nsample}.csv')
         run_nuts(target, args.nsample, args.burnin, args.thinning, savepath)
     elif args.algo == 'scp':
         savepath = os.path.join(savepath, f'{filename_prec}_scp_lat{args.latitude}_stepsize{args.stepsize}_n{args.nsample}_seed{args.seed}.csv')
-        run_scp(target, latitude=args.latitude, seed=args.seed, stepsize=args.stepsize, nsample=args.nsample, burnin=args.burnin, thinning=args.thinning, savepath=savepath)
+        run_scp(target, latitude=args.latitude, affine=args.affine, seed=args.seed, stepsize=args.stepsize, nsample=args.nsample, burnin=args.burnin, thinning=args.thinning, savepath=savepath)
     elif args.algo == 'hmc':
         savepath = os.path.join(savepath, f'{filename_prec}_hmc_n{args.nsample}_seed{args.seed}.csv')
         run_hmc(target, seed=args.seed, nsample=args.nsample, burnin=args.burnin, thinning=args.thinning, savepath=savepath)
@@ -218,6 +218,7 @@ if __name__ == "__main__":
     parser.add_argument('--prior_scale', type=float, default=2.5)
     parser.add_argument('--standardize', action='store_true', default=False)
     parser.add_argument('--latitude', type=float, default=1.5)
+    parser.add_argument('--affine', type=str, default='scalar', choices=['scalar', 'covariance'])
     parser.add_argument('--nsample', type=int, default=10000)
     parser.add_argument('--burnin', type=int, default=100)
     parser.add_argument('--stepsize', type=float, default=.1)
