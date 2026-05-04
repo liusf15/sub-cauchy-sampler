@@ -344,10 +344,13 @@ class LogisticRegression:
     def log_prob(self, beta):
         beta = jnp.asarray(beta)
         # prior
-        log_prior = (-self.prior_df - 1) / 2 * jnp.sum(jnp.log1p((beta / self.prior_scale) ** 2 / self.prior_df))
+        log_prior = (-self.prior_df - 1) / 2 * jnp.sum(
+            jnp.log1p((beta / self.prior_scale) ** 2 / self.prior_df),
+            axis=-1,
+        )
         
         # likelihood
-        eta = self.X @ beta
+        eta = jnp.einsum("np,...p->...n", self.X, beta)
         p = jax.nn.sigmoid(eta)
         p = jnp.clip(p, 1e-6, 1.0 - 1e-6)
 
