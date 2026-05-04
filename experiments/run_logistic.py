@@ -1,5 +1,10 @@
 import numpy as np
 from tqdm import trange 
+from pathlib import Path
+import sys
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
 import jax
 import jax.numpy as jnp
 import numpyro
@@ -10,6 +15,7 @@ import argparse
 import time
 from polyagamma import random_polyagamma
 
+from src.cauchy_mh import independent_cauchy_mh
 from src.scp_core import SCP
 from experiments.targets import LogisticRegression
 
@@ -27,9 +33,9 @@ def run_nuts(target, nsample, burnin, thinning, savepath):
     pd.DataFrame(nuts_samples).to_csv(savepath)
     print("saved to", savepath)
 
-def run_scp(target, latitude, seed, stepsize, nsample, burnin, thinning, savepath):
+def run_scp(target, latitude, affine, seed, stepsize, nsample, burnin, thinning, savepath):
     d = target.d
-    scp_model = SCP(d=d, latitude=latitude) 
+    scp_model = SCP(d=d, latitude=latitude, affine=affine)
     print("Initializing SCP parameters......")
     opt_params, losses = scp_model.minimize_reverse_kl(target.log_prob, 
                                                        seed=0, 
@@ -74,6 +80,29 @@ def run_hmc(target, seed, nsample, burnin, thinning, savepath):
         'time': hmc_time
     }
     pd.DataFrame(meta_data, index=[0]).to_csv(savepath.replace('.csv', '_meta.csv'))
+
+
+def run_imh(target, seed, stepsize, nsample, burnin, thinning, savepath):
+    start = time.time()
+    samples, accept_rate = independent_cauchy_mh(
+        target.log_prob,
+        jnp.zeros(target.d),
+        jax.random.key(seed),
+        nsample=nsample,
+        burnin=burnin,
+        thinning=thinning,
+        stepsize=stepsize,
+    )
+    elapsed = time.time() - start
+    print("Independent Cauchy MH acceptance rate:", accept_rate, "Time:", elapsed)
+    pd.DataFrame(samples).to_csv(savepath)
+    print("saved to", savepath)
+    meta_data = {
+        'accept_rate': float(accept_rate),
+        'time': elapsed,
+    }
+    pd.DataFrame(meta_data, index=[0]).to_csv(savepath.replace('.csv', '_meta.csv'))
+
 
 def run_gibbs(target, seed, nsample, burnin, thinning, savepath):
     rng = np.random.default_rng(seed)
@@ -158,17 +187,20 @@ def run(args):
 
     target = LogisticRegression(X, y, prior_df=prior_df, prior_scale=prior_scale)
     savepath = os.path.join(args.rootdir, args.date, 'logistic')
-    filename_prec = f"logistic_d{d}_n{n}_std_{args.standardize}_prior_{prior_df}_{prior_scale}"
+    filename_prec = f"logistic_d{d}_n{n}_std_{args.standardize}_prior_{prior_df}_{prior_scale}_affine{args.affine}"
     os.makedirs(savepath, exist_ok=True)
     if args.algo == 'nuts':
         savepath = os.path.join(savepath, f'{filename_prec}_nuts_n{args.nsample}.csv')
         run_nuts(target, args.nsample, args.burnin, args.thinning, savepath)
     elif args.algo == 'scp':
         savepath = os.path.join(savepath, f'{filename_prec}_scp_lat{args.latitude}_stepsize{args.stepsize}_n{args.nsample}_seed{args.seed}.csv')
-        run_scp(target, latitude=args.latitude, seed=args.seed, stepsize=args.stepsize, nsample=args.nsample, burnin=args.burnin, thinning=args.thinning, savepath=savepath)
+        run_scp(target, latitude=args.latitude, affine=args.affine, seed=args.seed, stepsize=args.stepsize, nsample=args.nsample, burnin=args.burnin, thinning=args.thinning, savepath=savepath)
     elif args.algo == 'hmc':
         savepath = os.path.join(savepath, f'{filename_prec}_hmc_n{args.nsample}_seed{args.seed}.csv')
         run_hmc(target, seed=args.seed, nsample=args.nsample, burnin=args.burnin, thinning=args.thinning, savepath=savepath)
+    elif args.algo == 'imh':
+        savepath = os.path.join(savepath, f'{filename_prec}_imh_stepsize{args.stepsize}_n{args.nsample}_seed{args.seed}.csv')
+        run_imh(target, seed=args.seed, stepsize=args.stepsize, nsample=args.nsample, burnin=args.burnin, thinning=args.thinning, savepath=savepath)
     elif args.algo == 'gibbs':
         savepath = os.path.join(savepath, f'{filename_prec}_gibbs_n{args.nsample}_seed{args.seed}.csv')
         run_gibbs(target, seed=args.seed, nsample=args.nsample, burnin=args.burnin, thinning=args.thinning, savepath=savepath)
@@ -177,13 +209,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--date', type=str, default='20251201')
     parser.add_argument('--rootdir', type=str, default='experiments/results')
-    parser.add_argument('--algo', type=str, default='scp', choices=['scp', 'nuts', 'hmc', 'gibbs'])
+    parser.add_argument('--algo', type=str, default='scp', choices=['scp', 'nuts', 'hmc', 'imh', 'gibbs'])
     parser.add_argument('--d', type=int, default=20)
     parser.add_argument('--n', type=int, default=50)
     parser.add_argument('--prior_df', type=float, default=2.0)
     parser.add_argument('--prior_scale', type=float, default=2.5)
     parser.add_argument('--standardize', action='store_true', default=False)
     parser.add_argument('--latitude', type=float, default=1.5)
+    parser.add_argument('--affine', type=str, default='scalar', choices=['scalar', 'covariance'])
     parser.add_argument('--nsample', type=int, default=10000)
     parser.add_argument('--burnin', type=int, default=100)
     parser.add_argument('--stepsize', type=float, default=.1)
