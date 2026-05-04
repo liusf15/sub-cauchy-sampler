@@ -11,6 +11,7 @@ numpy==2.2.3
 numpyro==0.18.0
 optax==0.2.4
 pandas==2.2.3
+polyagamma==2.0.2
 scipy==1.15.2
 seaborn==0.13.2
 statsmodels==0.14.5
