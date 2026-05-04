@@ -33,7 +33,7 @@ python -m experiments.run_skewt --affine scalar
 Run the logistic regression comparison across all samplers:
 
 ```bash
-python -m experiments/run_logistic --affine covariance 
+python -m experiments.run_logistic --affine covariance 
 ```
 
 Example code for multivariate probit regression in [experiments/multivariate_probit.ipynb](experiments/multivariate_probit.ipynb).
