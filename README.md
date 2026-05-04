@@ -22,4 +22,20 @@ Code for reproducing the numerical experiments in *Sub-Cauchy Sampling: Escaping
    ```
 
 
-See example usage in the [notebook](experiments/examples.ipynb). Scripts for running the experiments are in [experiments](experiments/).
+## Experiments and notebooks
+
+Run the skew-t comparison across all samplers:
+
+```bash
+python -m experiments.run_skewt --affine scalar
+```
+
+Run the logistic regression comparison across all samplers:
+
+```bash
+python -m experiments/run_logistic --affine covariance 
+```
+
+Example code for multivariate probit regression in [experiments/multivariate_probit.ipynb](experiments/multivariate_probit.ipynb).
+
+Example code for logistic regression with horseshoe prior in [experiments/logistic_regression_horseshoe.ipynb](experiments/logistic_regression_horseshoe.ipynb).
