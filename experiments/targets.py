@@ -76,7 +76,7 @@ class MultivariateStudentT(distrax.Distribution):
 
     @property
     def event_shape(self):
-        return (self.dim,)
+        return (self.d,)
 
     @property
     def batch_shape(self):
@@ -355,4 +355,149 @@ class LogisticRegression:
         ll = jnp.sum(y * jnp.log(p) + (1.0 - y) * jnp.log1p(-p), axis=-1)
 
         return log_prior + ll
-    
+
+
+class LogisticRegressionHorseshoe:
+    def __init__(self, X, y):
+        self.X = jnp.asarray(X)
+        self.y = jnp.asarray(y)
+        self.n, self.p = self.X.shape
+        self.d = 2 * self.p + 1
+
+    def unpack(self, state):
+        state = jnp.asarray(state)
+        beta = state[..., :self.p]
+        log_lambda_local = state[..., self.p:2 * self.p]
+        log_tau_global = state[..., -1]
+        return beta, log_lambda_local, log_tau_global
+
+    def extract_beta(self, samples):
+        return jnp.asarray(samples)[..., :self.p]
+
+    def initial_state(self):
+        return jnp.zeros(self.d)
+
+    def log_prob(self, state):
+        beta, log_lambda_local, log_tau_global = self.unpack(state)
+        lambda_local = jnp.exp(log_lambda_local)
+        tau_global = jnp.exp(log_tau_global)
+
+        eta = jnp.einsum("np,...p->...n", self.X, beta)
+        y = jnp.broadcast_to(self.y, eta.shape)
+        log_likelihood = jnp.sum(y * eta - jnp.logaddexp(0.0, eta), axis=-1)
+
+        scale = tau_global[..., None] * lambda_local
+        beta_prior = -0.5 * jnp.sum((beta / scale) ** 2, axis=-1) - jnp.sum(log_lambda_local, axis=-1) - self.p * log_tau_global
+        lambda_prior = jnp.sum(log_lambda_local - jnp.log1p(lambda_local**2), axis=-1)
+        tau_prior = log_tau_global - jnp.log1p(tau_global**2)
+        return log_likelihood + beta_prior + lambda_prior + tau_prior
+
+
+def ar1_correlation_matrix(n, rho):
+    idx = jnp.arange(n)
+    return rho ** jnp.abs(idx[:, None] - idx[None, :])
+
+
+class MultivariateProbitPosterior:
+    def __init__(self, X, y, rho=0.7, cov=None, prior_df=2.0, prior_scale=1.0):
+        """
+        Latent Gaussian posterior for multivariate binary outcomes:
+            Y_ij = 1{Z_ij > 0}
+            Z_i ~ N(mu_i, Sigma),  mu_ij = X_ij^T beta.
+
+        X has shape (n, J, p), y has shape (n, J), and Sigma is a fixed
+        J x J correlation matrix. If cov is not supplied, an AR(1)
+        correlation matrix with parameter rho is used.
+        """
+        self.X = jnp.asarray(X)
+        self.y = jnp.asarray(y)
+        if self.X.ndim != 3:
+            raise ValueError("X must have shape (n, J, p)")
+        if self.y.shape != self.X.shape[:2]:
+            raise ValueError("y must have shape (n, J), matching X.shape[:2]")
+
+        self.n, self.J, self.p = self.X.shape
+        self.d = self.p + self.n * self.J
+        self.side = 2.0 * self.y - 1.0
+        self.rho = float(rho)
+        self.prior_df = float(prior_df)
+        self.prior_scale = float(prior_scale)
+
+        self.cov = ar1_correlation_matrix(self.J, self.rho) if cov is None else jnp.asarray(cov)
+        if self.cov.shape != (self.J, self.J):
+            raise ValueError("cov must have shape (J, J)")
+        self.cov_tril = jnp.linalg.cholesky(self.cov)
+        self.cov_tril_inv = jnp.linalg.inv(self.cov_tril)
+        self.log_det = jnp.sum(jnp.log(jnp.diag(self.cov_tril)))
+
+    def unpack(self, state):
+        state = jnp.asarray(state)
+        beta = state[..., :self.p]
+        u = state[..., self.p:].reshape(state.shape[:-1] + (self.n, self.J))
+        return beta, u
+
+    def latent_from_unconstrained(self, u):
+        return self.side * jnp.exp(u)
+
+    def latent_from_state(self, state):
+        _, u = self.unpack(state)
+        return self.latent_from_unconstrained(u)
+
+    def extract_beta(self, samples):
+        return jnp.asarray(samples)[..., :self.p]
+
+    def initial_state(self):
+        beta = jnp.zeros(self.p)
+        z = 0.5 * self.side
+        u = jnp.log(self.side * z)
+        return jnp.concatenate([beta, u.reshape(-1)])
+
+    def log_prob(self, state):
+        beta, u = self.unpack(state)
+        z = self.latent_from_unconstrained(u)
+        mean = jnp.einsum("ijp,...p->...ij", self.X, beta)
+        resid = z - mean
+        whitened = jnp.einsum("jk,...ik->...ij", self.cov_tril_inv, resid)
+        log_latent = -0.5 * jnp.sum(whitened**2, axis=(-2, -1)) - self.n * self.log_det
+        log_prior = (-self.prior_df - 1.0) / 2.0 * jnp.sum(
+            jnp.log1p((beta / self.prior_scale) ** 2 / self.prior_df),
+            axis=-1,
+        )
+        log_jacobian = jnp.sum(u, axis=(-2, -1))
+        return log_prior + log_latent + log_jacobian
+
+
+class HorseshoeRegressionPosterior:
+    def __init__(self, X, y, sigma=1.0):
+        self.X = jnp.asarray(X)
+        self.y = jnp.asarray(y)
+        self.n, self.p = self.X.shape
+        self.d = 2 * self.p + 1
+        self.sigma = float(sigma)
+
+    def unpack(self, state):
+        state = jnp.asarray(state)
+        beta = state[..., :self.p]
+        log_lambda_local = state[..., self.p:2 * self.p]
+        log_tau_global = state[..., -1]
+        return beta, log_lambda_local, log_tau_global
+
+    def extract_beta(self, samples):
+        return jnp.asarray(samples)[..., :self.p]
+
+    def initial_state(self):
+        return jnp.zeros(self.d)
+
+    def log_prob(self, state):
+        beta, log_lambda_local, log_tau_global = self.unpack(state)
+        lambda_local = jnp.exp(log_lambda_local)
+        tau_global = jnp.exp(log_tau_global)
+
+        resid = (self.y - self.X @ beta) / self.sigma
+        log_likelihood = -0.5 * jnp.sum(resid**2) - self.n * jnp.log(self.sigma)
+
+        scale = tau_global * lambda_local
+        beta_prior = -0.5 * jnp.sum((beta / scale) ** 2) - jnp.sum(log_lambda_local) - self.p * log_tau_global
+        lambda_prior = jnp.sum(log_lambda_local - jnp.log1p(lambda_local**2))
+        tau_prior = log_tau_global - jnp.log1p(tau_global**2)
+        return log_likelihood + beta_prior + lambda_prior + tau_prior
