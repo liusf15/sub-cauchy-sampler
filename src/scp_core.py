@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+from jax.scipy.linalg import solve_triangular
 from scipy.stats import beta
 import jax_tqdm
 from src.train import train
@@ -93,40 +94,94 @@ def stepout_dark_side(x, y, lat):
     return y_
 
 class SCP:
-    def __init__(self, d, latitude):
+    def __init__(self, d, latitude, affine='scalar'):
         self.d = d
         self.latitude = latitude
+        if affine not in ('scalar', 'covariance'):
+            raise ValueError(f"Unknown affine mode: {affine}")
+        self.affine = affine
+
+    def _transform_observer(self, observer):
+        observer = observer / jnp.sqrt(1 + jnp.sum(observer**2))
+        return observer * jnp.sqrt(1 - (1 - self.latitude)**2)
+
+    def _inverse_transform_observer(self, observer):
+        observer = observer / jnp.sqrt(1 - (1 - self.latitude)**2)
+        return observer / jnp.sqrt(1 - jnp.sum(observer**2))
+
+    def _transform_scale_tril(self, scale_tril):
+        scale_tril = jnp.tril(scale_tril)
+        raw_diag = jnp.diag(scale_tril)
+        return scale_tril - jnp.diag(raw_diag) + jnp.diag(jnp.exp(raw_diag))
+
+    def _inverse_transform_scale_tril(self, scale_tril):
+        scale_tril = jnp.tril(scale_tril)
+        diag = jnp.diag(scale_tril)
+        return scale_tril - jnp.diag(diag) + jnp.diag(jnp.log(diag))
+
+    def _affine_forward(self, affine_scale, x):
+        if self.affine == 'scalar':
+            return x * affine_scale
+        return x @ affine_scale.T
+
+    def _affine_inverse(self, affine_scale, y):
+        if self.affine == 'scalar':
+            return y / affine_scale
+        if y.ndim == 1:
+            return solve_triangular(affine_scale, y, lower=True)
+        return solve_triangular(affine_scale, y.T, lower=True).T
+
+    def _affine_logdet(self, affine_scale):
+        if self.affine == 'scalar':
+            return self.d * jnp.log(affine_scale)
+        return jnp.sum(jnp.log(jnp.diag(affine_scale)))
+
+    def _init_params(self):
+        params = {
+            'observer': jnp.zeros(self.d),
+            'shift': jnp.zeros(self.d),
+        }
+        if self.affine == 'scalar':
+            params['scale'] = 0.0
+        else:
+            params['scale_tril'] = jnp.zeros((self.d, self.d))
+        return params
 
     def transform_params(self, params):
-        observer = params['observer']
-        observer = observer / jnp.sqrt(1 + jnp.sum(observer**2)) * jnp.sqrt(1 - (1 - self.latitude)**2)
-        scale = jnp.exp(params['scale'])
+        observer = self._transform_observer(params['observer'])
         shift = params['shift']
+        if self.affine == 'scalar':
+            scale = jnp.exp(params['scale'])
+        else:
+            scale = self._transform_scale_tril(params['scale_tril'])
         return observer, shift, scale
-    
+
     def inverse_transform_params(self, observer, shift, scale):
-        observer = observer / jnp.sqrt(1 - (1 - self.latitude)**2)
-        observer = observer / jnp.sqrt(1 - jnp.sum(observer**2) )
-        return {'observer': observer, 
-                'shift': shift, 
-                'scale': jnp.log(scale)}
+        observer = self._inverse_transform_observer(observer)
+        params = {
+            'observer': observer,
+            'shift': shift,
+        }
+        if self.affine == 'scalar':
+            params['scale'] = jnp.log(scale)
+        else:
+            params['scale_tril'] = self._inverse_transform_scale_tril(scale)
+        return params
 
     def projection(self, params, x):
         observer, shift, scale = self.transform_params(params)
         x_ = jnp.atleast_2d(x)
-        y = (self.latitude * x_[:, :-1] - x_[:, -1:] * observer) / (self.latitude - x_[:, -1:])
-        y = y * scale + shift
+        denom = jnp.maximum(self.latitude - x_[:, -1:], 1e-6)
+        y = (self.latitude * x_[:, :-1] - x_[:, -1:] * observer) / denom
+        y = self._affine_forward(scale, y) + shift
         return y[0] if x.ndim == 1 else y
 
     def inverse_projection(self, params, y):
         observer, shift, scale = self.transform_params(params)
-
-        y_hat = (y - shift) / scale
+        y_hat = self._affine_inverse(scale, y - shift)
 
         _a = jnp.sum((y_hat - observer) ** 2) + self.latitude ** 2
-        
         _b = 2 * ((jnp.dot(y_hat - observer, observer) - self.latitude * (self.latitude - 1)))
-        
         _c = jnp.sum(observer ** 2) + self.latitude ** 2 - 2 * self.latitude
 
         Delta = _b ** 2 - 4 * _a * _c
@@ -139,20 +194,17 @@ class SCP:
         observer, shift, scale = self.transform_params(params)
         if y is None:
             y = self.projection(params, x)
-        y_hat = (y - shift) / scale
+        y_hat = self._affine_inverse(scale, y - shift)
 
         _a = jnp.sum((y_hat - observer) ** 2) + self.latitude ** 2
-        
         _b = 2 * ((jnp.dot(y_hat - observer, observer) - self.latitude * (self.latitude - 1)))
-        
         _c = jnp.sum(observer ** 2) + self.latitude ** 2 - 2 * self.latitude
 
         Delta = _b ** 2 - 4 * _a * _c
         M = (-_b + jnp.sqrt(Delta)) / (2 * _a)
-        
-        d = self.d
-        
-        return d * jnp.log(scale / M) - jnp.log(self.latitude) + jnp.log(M * jnp.sum((y_hat - observer) ** 2) + jnp.dot(y_hat - observer, observer) + self.latitude - self.latitude**2 * (1 - M))
+        affine_logdet = self._affine_logdet(scale)
+
+        return affine_logdet - self.d * jnp.log(M) - jnp.log(self.latitude) + jnp.log(M * jnp.sum((y_hat - observer) ** 2) + jnp.dot(y_hat - observer, observer) + self.latitude - self.latitude**2 * (1 - M))
 
     def log_prob(self, params, y):
          return -self.log_jacobian(params, y)
@@ -163,10 +215,12 @@ class SCP:
     
     def reverse_kl(self, params, logp_fn, X, clip_value=1000.):
         Y = self.projection(params, X)
-        Y = jnp.clip(Y, -clip_value, clip_value)
-        logp = jax.vmap(logp_fn)(Y)
+        Y_for_logp = jnp.clip(Y, -clip_value, clip_value)
+        logp = jax.vmap(logp_fn)(Y_for_logp)
         logdet = jax.vmap(self.log_jacobian, in_axes=(None, 0))(params, Y)
-        return -jnp.mean(logdet + logp)
+        objective = logdet + logp
+        objective = jnp.nan_to_num(objective, nan=-1e20, posinf=-1e20, neginf=-1e20)
+        return -jnp.mean(objective)
     
     def forward_kl(self, params, Y):
         logq = -jax.vmap(self.log_jacobian, in_axes=(None, 0))(params, Y)
@@ -179,20 +233,29 @@ class SCP:
             return logp_Rd(y) + logdet
         return logp_transformed
     
-    def minimize_reverse_kl(self, logp_fn, seed=0, ntrain=1000, learning_rate=0.01, max_iter=1000, clip_value=1000.):
-        d = self.d
-        ref_samples = uniform_sample_bright_side(d, self.latitude, jax.random.key(seed), n=ntrain)
-
-        params = {
-            'observer': jnp.zeros(d),
-            'shift': jnp.zeros(d),
-            'scale': 0. # log scale
-        }
+    def minimize_reverse_kl(
+        self,
+        logp_fn,
+        seed=0,
+        ntrain=1000,
+        learning_rate=0.01,
+        max_iter=1000,
+        clip_value=1000.,
+        grad_clip_norm=10.0,
+    ):
+        ref_samples = uniform_sample_bright_side(self.d, self.latitude, jax.random.key(seed), n=ntrain)
+        params = self._init_params()
 
         def loss_fn(params):
             return self.reverse_kl(params, logp_fn, ref_samples, clip_value=clip_value)
 
-        opt_params, losses = train(loss_fn, params, learning_rate=learning_rate, max_iter=max_iter)
+        opt_params, losses = train(
+            loss_fn,
+            params,
+            learning_rate=learning_rate,
+            max_iter=max_iter,
+            grad_clip_norm=grad_clip_norm,
+        )
         return opt_params, losses
     
     def rwm_bright_side(self, logp_fn, params, seed, x0=None, stepsize=1., nsample=1000, burnin=100, thinning=1, algo='stepout'):

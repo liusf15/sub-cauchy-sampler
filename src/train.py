@@ -3,8 +3,14 @@ import jax.numpy as jnp
 import optax
 import jax_tqdm
 
-def train(loss_fn, params, learning_rate=0.01, max_iter=500):
-    optimizer = optax.adam(learning_rate)
+def train(loss_fn, params, learning_rate=0.01, max_iter=500, grad_clip_norm=None):
+    if grad_clip_norm is None:
+        optimizer = optax.adam(learning_rate)
+    else:
+        optimizer = optax.chain(
+            optax.clip_by_global_norm(grad_clip_norm),
+            optax.adam(learning_rate),
+        )
     opt_state = optimizer.init(params)
     
     @jax_tqdm.scan_tqdm(max_iter)
