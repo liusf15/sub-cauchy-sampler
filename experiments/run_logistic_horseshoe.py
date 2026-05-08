@@ -10,7 +10,6 @@ import argparse
 import time
 import matplotlib
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 from polyagamma import random_polyagamma
 
 from src.cauchy_mh import independent_cauchy_mh
@@ -69,8 +68,6 @@ def run_scp(target, latitude, affine, seed, stepsize, nsample, burnin, thinning)
     return scp_samples, {
         'accept_rate': float(scp_accept_prob),
         'time': scp_time,
-        'train_time': train_time,
-        'final_loss': float(losses[-1]),
     }
 
 def run_hmc(target, seed, nsample, burnin, thinning):
@@ -106,7 +103,6 @@ def run_imh(target, seed, stepsize, nsample, burnin, thinning):
     return samples, {
         'accept_rate': float(accept_rate),
         'time': elapsed,
-        'stepsize': stepsize,
     }
 
 
@@ -261,9 +257,9 @@ def run(args):
     gibbs_samples, gibbs_meta = run_gibbs(
         target,
         seed=args.seed,
-        nsample=args.nsample//10,
+        nsample=args.nsample//5,
         burnin=args.burnin,
-        thinning=args.thinning//10,
+        thinning=args.thinning//5,
     )
     print(gibbs_samples.shape)
 
@@ -285,6 +281,8 @@ def run(args):
         'imh': imh_meta,
         'gibbs': gibbs_meta,
     }
+    pd.DataFrame(meta_by_method).T.to_csv(f'{filename_base}_meta.csv')
+    print("saved meta info to", f'{filename_base}_meta.csv')
 
     ps = jnp.array([0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 0.8, 0.9, 0.95, 0.98, 0.99])
     quantiles_by_method = {
