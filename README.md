@@ -34,11 +34,9 @@ python3 -m experiments.skew_t.run_skewt --seeds 0:10
 python3 -m experiments.skew_t.plot_qq_grid 
 ```
 
-### Figure 6: Skew-t tail probabilities
+Estimating tail probabilities
 
 ```bash
-DATE=skewt_tail
-
 python3 -m experiments.skew_t.tail_variance --date skewt_tail --nseeds 20 
 ```
 
