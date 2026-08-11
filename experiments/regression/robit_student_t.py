@@ -615,7 +615,7 @@ def run(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--date', type=str, default='s4_robit_student_t')
+    parser.add_argument('--date', type=str, default='robit_t')
     parser.add_argument('--rootdir', type=str, default='results')
     parser.add_argument('--plotdir', type=str, default='plots')
     parser.add_argument('--algo', type=str, default='scp', choices=['all', 'scp', 'nuts', 'hmc', 'is', 'imh', 'gibbs'])
