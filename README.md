@@ -55,8 +55,7 @@ python3 -m experiments.regression.plot_qq_grid --figure logistic_t
 
 ```bash
 
-python3 -m experiments.regression.robit_student_t \
-  --methods Gibbs HMC IMH SCP --seeds 0:10
+python3 -m experiments.regression.robit_student_t  --seeds 0:10
 
 python3 -m experiments.regression.plot_qq_grid --figure robit_t
 ```
