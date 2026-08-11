@@ -63,8 +63,7 @@ python3 -m experiments.regression.plot_qq_grid --figure robit_t
 #### Logistic link, horseshoe prior
 
 ```bash
-python -m experiments.regression.logistic_horseshoe \
---methods Gibbs HMC IMH SCS --seeds 0:10
+python -m experiments.regression.logistic_horseshoe --seeds 0:10
 
 python -m experiments.regression.plot_logistic_horseshoe_noncentered_beta1_qq
 ```
