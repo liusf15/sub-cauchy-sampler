@@ -215,7 +215,7 @@ class SCP:
     
     def reverse_kl(self, params, logp_fn, X, clip_value=1000.):
         Y = self.projection(params, X)
-        Y_for_logp = jnp.clip(Y, -clip_value, clip_value)
+        Y_for_logp = Y if clip_value is None else jnp.clip(Y, -clip_value, clip_value)
         logp = jax.vmap(logp_fn)(Y_for_logp)
         logdet = jax.vmap(self.log_jacobian, in_axes=(None, 0))(params, Y)
         objective = logdet + logp
