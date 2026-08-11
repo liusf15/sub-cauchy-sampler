@@ -37,7 +37,7 @@ python3 -m experiments.skew_t.plot_qq_grid
 Estimating tail probabilities
 
 ```bash
-python3 -m experiments.skew_t.tail_variance --date skewt_tail --nseeds 20 
+python3 -m experiments.skew_t.tail_variance --date skewt_tail --nseeds 10 
 ```
 
 ### Robust regression
