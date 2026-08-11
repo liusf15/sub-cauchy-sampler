@@ -176,7 +176,7 @@ def main():
     parser = argparse.ArgumentParser(
         description='Run the skew-t Figure 5 SCS/HMC comparison efficiently over multiple seeds.'
     )
-    parser.add_argument('--date', type=str, default='skewt')
+    parser.add_argument('--date', type=str, default='skewt_qq')
     parser.add_argument('--rootdir', type=str, default='results')
     parser.add_argument('--plotdir', type=str, default='plots')
     parser.add_argument('--seeds', type=str, default='0:20')
