@@ -186,7 +186,7 @@ cython_debug/
 #  that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
 #  and can be added to the global gitignore or merged into this file. However, if you prefer, 
 #  you could uncomment the following to ignore the entire vscode folder
-# .vscode/
+.vscode/
 
 # Ruff stuff:
 .ruff_cache/
@@ -207,4 +207,21 @@ marimo/_lsp/
 __marimo__/
 
 **.DS_Store
+.DS_Store
 venv_scp/
+
+# Generated experiment outputs. Keep README files so the output contract is
+# documented, but treat numerical runs as reproducible local artifacts.
+results/**
+!results/
+!results/**/
+!results/**/README.md
+
+# Legacy generated output locations from earlier layouts.
+experiments/results/**
+!experiments/results/
+!experiments/results/README.md
+experiments/plots/**
+!experiments/plots/
+!experiments/plots/README.md
+experiments/logistic_horseshoe_nuts_quantiles.csv
