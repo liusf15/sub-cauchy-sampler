@@ -318,18 +318,25 @@ class RobitRegression:
         self.prior_scale = float(prior_scale)
 
     def log_prob(self, beta):
-        beta = jnp.asarray(beta)
+        beta = jnp.asarray(beta, dtype=self.X.dtype)
         # prior
-        log_prior = (-self.prior_df - 1) / 2 * jnp.sum(jnp.log1p((beta / self.prior_scale) ** 2 / self.prior_df))
+        log_prior = (-self.prior_df - 1) / 2 * jnp.sum(
+            jnp.log1p((beta / self.prior_scale) ** 2 / self.prior_df),
+            axis=-1,
+        )
         
         # likelihood
-        eta = self.X @ beta
+        eta = jnp.einsum("np,...p->...n", self.X, beta)
         z = eta / self.link_scale
         p = student_t_cdf(z, self.link_df)
-        p = jnp.clip(p, 1e-8, 1.0 - 1e-8)
+        eps = jnp.maximum(
+            jnp.asarray(1e-6, dtype=beta.dtype),
+            jnp.asarray(jnp.finfo(beta.dtype).eps, dtype=beta.dtype),
+        )
+        p = jnp.clip(p, eps, 1.0 - eps)
 
-        y = jnp.broadcast_to(self.y, p.shape)
-        ll = jnp.sum(y * jnp.log(p) + (1.0 - y) * jnp.log1p(-p), axis=-1)
+        y = jnp.broadcast_to(self.y, p.shape).astype(bool)
+        ll = jnp.sum(jnp.where(y, jnp.log(p), jnp.log1p(-p)), axis=-1)
 
         return log_prior + ll
 
@@ -360,12 +367,23 @@ class LogisticRegression:
         return log_prior + ll
 
 
+def _logistic_log_likelihood(X, y, beta):
+    eta = jnp.einsum("np,...p->...n", X, beta)
+    y = jnp.broadcast_to(y, eta.shape) > 0.5
+    return jnp.sum(jnp.where(y, -jax.nn.softplus(-eta), -jax.nn.softplus(eta)), axis=-1)
+
+
+def _log_half_cauchy_on_log_scale(log_scale):
+    return -jnp.logaddexp(-log_scale, log_scale)
+
+
 class LogisticRegressionHorseshoe:
     def __init__(self, X, y):
         self.X = jnp.asarray(X)
         self.y = jnp.asarray(y)
         self.n, self.p = self.X.shape
         self.d = 2 * self.p + 1
+        self.parametrization = 'centered'
 
     def unpack(self, state):
         state = jnp.asarray(state)
@@ -380,20 +398,78 @@ class LogisticRegressionHorseshoe:
     def initial_state(self):
         return jnp.zeros(self.d)
 
+    def _beta_scaled_sq(self, beta, log_scale):
+        dtype = jnp.result_type(beta, log_scale)
+        tiny = jnp.finfo(dtype).tiny
+        log_max = jnp.log(jnp.finfo(dtype).max) - jnp.log(float(self.p)) - 2.0
+        log_abs_beta = jnp.log(jnp.maximum(jnp.abs(beta), tiny))
+        log_scaled_sq = jnp.minimum(2.0 * (log_abs_beta - log_scale), log_max)
+        return jnp.where(beta == 0.0, 0.0, jnp.exp(log_scaled_sq))
+
     def log_prob(self, state):
         beta, log_lambda_local, log_tau_global = self.unpack(state)
-        lambda_local = jnp.exp(log_lambda_local)
-        tau_global = jnp.exp(log_tau_global)
 
-        eta = jnp.einsum("np,...p->...n", self.X, beta)
-        y = jnp.broadcast_to(self.y, eta.shape)
-        log_likelihood = jnp.sum(y * eta - jnp.logaddexp(0.0, eta), axis=-1)
+        log_likelihood = _logistic_log_likelihood(self.X, self.y, beta)
 
-        scale = tau_global[..., None] * lambda_local
-        beta_prior = -0.5 * jnp.sum((beta / scale) ** 2, axis=-1) - jnp.sum(log_lambda_local, axis=-1) - self.p * log_tau_global
-        lambda_prior = jnp.sum(log_lambda_local - jnp.log1p(lambda_local**2), axis=-1)
-        tau_prior = log_tau_global - jnp.log1p(tau_global**2)
+        log_scale = log_tau_global[..., None] + log_lambda_local
+        beta_scaled_sq = self._beta_scaled_sq(beta, log_scale)
+        beta_prior = (
+            -0.5 * jnp.sum(beta_scaled_sq, axis=-1)
+            - jnp.sum(log_lambda_local, axis=-1)
+            - self.p * log_tau_global
+        )
+        lambda_prior = jnp.sum(_log_half_cauchy_on_log_scale(log_lambda_local), axis=-1)
+        tau_prior = _log_half_cauchy_on_log_scale(log_tau_global)
         return log_likelihood + beta_prior + lambda_prior + tau_prior
+
+
+class NonCenteredLogisticRegressionHorseshoe:
+    def __init__(self, X, y):
+        self.X = jnp.asarray(X)
+        self.y = jnp.asarray(y)
+        self.n, self.p = self.X.shape
+        self.d = 2 * self.p + 1
+        self.parametrization = 'noncentered'
+
+    def unpack(self, state):
+        state = jnp.asarray(state)
+        z = state[..., :self.p]
+        log_lambda_local = state[..., self.p:2 * self.p]
+        log_tau_global = state[..., -1]
+        return z, log_lambda_local, log_tau_global
+
+    def initial_state(self):
+        return jnp.zeros(self.d)
+
+    def beta_from_state(self, state):
+        z, log_lambda_local, log_tau_global = self.unpack(state)
+        log_scale = log_tau_global[..., None] + log_lambda_local
+        dtype = jnp.result_type(z, log_scale)
+        tiny = jnp.finfo(dtype).tiny
+        log_abs_z = jnp.log(jnp.maximum(jnp.abs(z), tiny))
+        max_log_abs_beta = jnp.log(jnp.finfo(dtype).max) - jnp.log(float(self.p)) - 4.0
+        log_abs_beta = jnp.minimum(log_abs_z + log_scale, max_log_abs_beta)
+        beta = jnp.sign(z) * jnp.exp(log_abs_beta)
+        return jnp.where(z == 0.0, 0.0, beta)
+
+    def extract_beta(self, samples):
+        return self.beta_from_state(samples)
+
+    def to_centered(self, samples):
+        samples = jnp.asarray(samples)
+        _, log_lambda_local, log_tau_global = self.unpack(samples)
+        beta = self.beta_from_state(samples)
+        return jnp.concatenate([beta, log_lambda_local, log_tau_global[..., None]], axis=-1)
+
+    def log_prob(self, state):
+        z, log_lambda_local, log_tau_global = self.unpack(state)
+        beta = self.beta_from_state(state)
+
+        log_likelihood = _logistic_log_likelihood(self.X, self.y, beta)
+        z_prior = -0.5 * jnp.sum(z ** 2, axis=-1)
+        lambda_prior = jnp.sum(_log_half_cauchy_on_log_scale(log_lambda_local), axis=-1)
+        tau_prior = _log_half_cauchy_on_log_scale(log_tau_global)
+        return log_likelihood + z_prior + lambda_prior + tau_prior
 
 
 def ar1_correlation_matrix(n, rho):
@@ -491,16 +567,51 @@ class HorseshoeRegressionPosterior:
     def initial_state(self):
         return jnp.zeros(self.d)
 
+    def _beta_scaled_sq(self, beta, log_scale):
+        dtype = jnp.result_type(beta, log_scale)
+        tiny = jnp.finfo(dtype).tiny
+        log_max = jnp.log(jnp.finfo(dtype).max) - jnp.log(float(self.p)) - 2.0
+        log_abs_beta = jnp.log(jnp.maximum(jnp.abs(beta), tiny))
+        log_scaled_sq = jnp.minimum(2.0 * (log_abs_beta - log_scale), log_max)
+        return jnp.where(beta == 0.0, 0.0, jnp.exp(log_scaled_sq))
+
     def log_prob(self, state):
         beta, log_lambda_local, log_tau_global = self.unpack(state)
-        lambda_local = jnp.exp(log_lambda_local)
-        tau_global = jnp.exp(log_tau_global)
 
         resid = (self.y - self.X @ beta) / self.sigma
         log_likelihood = -0.5 * jnp.sum(resid**2) - self.n * jnp.log(self.sigma)
 
-        scale = tau_global * lambda_local
-        beta_prior = -0.5 * jnp.sum((beta / scale) ** 2) - jnp.sum(log_lambda_local) - self.p * log_tau_global
-        lambda_prior = jnp.sum(log_lambda_local - jnp.log1p(lambda_local**2))
-        tau_prior = log_tau_global - jnp.log1p(tau_global**2)
+        log_scale = log_tau_global + log_lambda_local
+        beta_scaled_sq = self._beta_scaled_sq(beta, log_scale)
+        beta_prior = -0.5 * jnp.sum(beta_scaled_sq) - jnp.sum(log_lambda_local) - self.p * log_tau_global
+        lambda_prior = jnp.sum(log_lambda_local - jnp.logaddexp(0.0, 2.0 * log_lambda_local))
+        tau_prior = log_tau_global - jnp.logaddexp(0.0, 2.0 * log_tau_global)
         return log_likelihood + beta_prior + lambda_prior + tau_prior
+
+
+class GDPRegressionPosterior:
+    def __init__(self, X, y, sigma=1.0, alpha=1.0, eta=1.0):
+        self.X = jnp.asarray(X)
+        self.y = jnp.asarray(y)
+        self.n, self.p = self.X.shape
+        self.d = self.p
+        self.sigma = float(sigma)
+        self.alpha = float(alpha)
+        self.eta = float(eta)
+
+    def extract_beta(self, samples):
+        return jnp.asarray(samples)
+
+    def initial_state(self):
+        return jnp.zeros(self.d)
+
+    def log_prob(self, beta):
+        beta = jnp.asarray(beta)
+        pred = jnp.einsum("np,...p->...n", self.X, beta)
+        resid = (self.y - pred) / self.sigma
+        log_likelihood = -0.5 * jnp.sum(resid**2, axis=-1) - self.n * jnp.log(self.sigma)
+        log_prior = -(self.alpha + 1.0) * jnp.sum(
+            jnp.log1p(jnp.abs(beta) / (self.alpha * self.eta)),
+            axis=-1,
+        )
+        return log_likelihood + log_prior
